@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FACTU Pro Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Business Dashboard</h1>
+
+        <div class="row">
+            <div class="chart-container">
+                <h3>Client Distribution</h3>
+                <canvas id="clientChart"></canvas>
+            </div>
+
+            <div class="expiring-products">
+                <h3>Expiring Products (Next 30 Days)</h3>
+                <ul id="expiringList"></ul>
+            </div>
+        </div>
+
+        <div class="recent-invoices">
+            <h3>Recent Invoices</h3>
+            <table id="invoiceTable">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Amount</th>
+                        <th>Client</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+      // In dashboard.html
+async function loadDashboard() {
+    try {
+        const response = await fetch('/dashboard-data');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+
+        // Client Chart
+        if (data.client_stats.length > 0) {
+            new Chart(document.getElementById('clientChart'), {
+                // ... existing chart config ...
+            });
+        } else {
+            document.getElementById('clientChart').closest('.chart-container').innerHTML =
+                '<p>No client data available</p>';
+        }
+
+        // Expiring Products
+        const expiringList = document.getElementById('expiringList');
+        if (data.expiring_products.length > 0) {
+            data.expiring_products.forEach(product => {
+                // ... existing list population ...
+            });
+        } else {
+            expiringList.innerHTML = '<li>No expiring products</li>';
+        }
+
+        // Recent Invoices
+        const tbody = document.querySelector('#invoiceTable tbody');
+        if (data.recent_invoices.length > 0) {
+            // ... existing table population ...
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3">No recent invoices</td></tr>';
+        }
+    } catch (error) {
+        console.error('Dashboard loading error:', error);
+        alert('Error loading dashboard data. Please try again.');
+    }
+}
+
+        loadDashboard();
+    </script>
+</body>
+</html>

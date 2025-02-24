@@ -1,0 +1,13 @@
+{
+    "date": "2024-10-17",
+    "number_of_invoices": 1,
+    "total_ht": 174.0,
+    "total_tva": 34.800000000000004,
+    "total_global": 208.8,
+    "invoices": [
+        {
+            "invoice_number": "FR-001",
+            "total": "174.00"
+        }
+    ]
+}

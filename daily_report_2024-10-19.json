@@ -1,0 +1,10 @@
+{
+    "date": "2024-10-19",
+    "number_of_invoices": 1,
+    "total_ht": 0.0,
+    "total_tva": 0.0,
+    "total_global": 0.0,
+    "invoices": [
+        {}
+    ]
+}
