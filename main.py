@@ -6,6 +6,7 @@ from datetime import datetime
 
 from Config import get_environment_settings
 from Routes.advanced_payments_routes import advanced_payments_router
+
 # Import all routes
 
 from Routes.alert_routes import router as alert_router
