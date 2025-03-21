@@ -5,7 +5,6 @@ from database import get_db_connection
 
 logger = logging.getLogger(__name__)
 
-
 class CheckDivisionService:
     @staticmethod
     def create_check_division(check_id, amount, division_date, status):

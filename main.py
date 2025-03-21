@@ -3,12 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import logging
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 from Config import get_environment_settings
 from Routes.advanced_payments_routes import advanced_payments_router
 
 # Import all routes
-
 from Routes.alert_routes import router as alert_router
 from Routes.check_division_routes import router as check_division_router
 from Routes.check_routes import router as check_router
@@ -38,25 +38,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Lifecycle event handling
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handles startup and shutdown events."""
+    try:
+        await init_db()  # Ensure this is awaited if it's an async function
+        logger.info("Database initialized successfully on startup")
+    except Exception as e:
+        logger.error(f"Failed to initialize database on startup: {e}")
+        raise
+    yield
+    logger.info("Application shutdown")
+
 # Initialize FastAPI app
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description=settings.DESCRIPTION,
     version=settings.VERSION,
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
-
-# Database initialization on startup
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database on startup"""
-    try:
-        init_db()
-        logger.info("Database initialized successfully on startup")
-    except Exception as e:
-        logger.error(f"Failed to initialize database on startup: {e}")
-        raise
 
 # Configure CORS
 app.add_middleware(
@@ -89,7 +92,7 @@ ROUTERS = [
     (transaction_alert_router, "/transactions/alerts"),
     (transaction_router, "/transactions"),
     (unpaid_router, "/unpaid"),
-    (communications_router, "/communications")  # Added communications router
+    (communications_router, "/communications")
 ]
 
 # Include all routers with their specific prefixes
@@ -99,7 +102,6 @@ for router, prefix in ROUTERS:
         prefix=f"{settings.API_V1_STR}{prefix}",
         tags=[prefix.strip("/").title()]
     )
-
 
 @app.get("/")
 async def root():
@@ -113,7 +115,6 @@ async def root():
         "environment": settings.model_config["env_file"]
     }
 
-
 @app.get("/health")
 async def health_check():
     """Health check endpoint for monitoring"""
@@ -125,17 +126,15 @@ async def health_check():
         "database": settings.DATABASE_URL
     }
 
-
 # Error handlers
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     logger.error(f"Global exception handler: {exc}", exc_info=True)
     return {
         "status": "error",
-        "message": str(exc),
+        "message": "An internal error occurred." if not settings.DEBUG else str(exc),
         "type": type(exc).__name__
     }
-
 
 if __name__ == "__main__":
     import uvicorn

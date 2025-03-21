@@ -19,3 +19,4 @@ class Client(Base):
 
     # Fixed relationship name to match PaymentTransaction
     payment_transactions = relationship("PaymentTransaction", back_populates="client")
+    invoices = relationship("Invoice", back_populates="client")  

@@ -1,12 +1,10 @@
 from fastapi import APIRouter, HTTPException, Query, Depends
-from typing import Dict, Optional, List
-from datetime import datetime
+from typing import List, Dict, Optional, Any
 from enum import Enum
 from pydantic import BaseModel, Field
 import logging
 from database import get_db_session
 from Services.client_service import ClientService
-import sqlite3
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -25,8 +23,8 @@ class ClientBase(BaseModel):
     address: str = Field(..., description="Client address")
     category: ClientCategory = Field(default=ClientCategory.STANDARD, description="Client category")
 
-    model_config = {
-        "json_schema_extra": {
+    class Config:
+        json_schema_extra = {
             "example": {
                 "name": "Example Company",
                 "email": "contact@example.com",
@@ -35,28 +33,13 @@ class ClientBase(BaseModel):
                 "category": "standard"
             }
         }
-    }
 
 # Dependency to get service with db session
-async def get_client_service():
+async def get_client_service() -> ClientService:
     """Async dependency to get client service with proper session management"""
-    session = None
-    try:
-        session = get_db_session()
+    async with get_db_session() as session:
         service = ClientService(session)
         yield service
-    except Exception as e:
-        logger.error(f"Error creating client service: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to initialize client service: {str(e)}"
-        )
-    finally:
-        if session:
-            try:
-                session.close()
-            except Exception as e:
-                logger.error(f"Error closing database session: {e}")
 
 @router.post("/")
 async def create_client(
@@ -65,18 +48,13 @@ async def create_client(
 ):
     """Create a new client"""
     try:
-        client_data = client.model_dump()
+        client_data = client.dict()  # Convert Pydantic model to dictionary
         result = await service.create_client(client_data)
         return {
             "status": "success",
             "message": "Client created successfully",
             "client": result
         }
-    except sqlite3.IntegrityError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Client with this email already exists: {str(e)}"
-        )
     except Exception as e:
         logger.error(f"Error creating client: {str(e)}")
         raise HTTPException(
@@ -92,7 +70,7 @@ async def update_client(
 ):
     """Update client information"""
     try:
-        client_data = client.model_dump()
+        client_data = client.dict()  # Convert Pydantic model to dictionary
         result = await service.update_client(client_id, client_data)
         if not result:
             raise HTTPException(status_code=404, detail="Client not found")
@@ -101,11 +79,6 @@ async def update_client(
             "message": "Client updated successfully",
             "client": result
         }
-    except sqlite3.IntegrityError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Update violates unique constraints: {str(e)}"
-        )
     except Exception as e:
         logger.error(f"Error updating client: {str(e)}")
         raise HTTPException(
@@ -184,20 +157,34 @@ async def get_client_revenue(
             detail=f"Failed to get client revenue: {str(e)}"
         )
 
-@router.get("/key-accounts")
+@router.get("/key-accounts", response_model=List[Dict])
 async def get_key_accounts(
     service: ClientService = Depends(get_client_service)
 ):
     """Get list of key accounts"""
+
     try:
-        return await service.get_key_accounts()
+        key_accounts = await service.get_key_accounts()
+        if not key_accounts:
+            logger.info("No key accounts found.")
+            raise HTTPException(status_code=404, detail="No key accounts found")
+        logger.info(f"Retrieved {len(key_accounts)} key accounts successfully.")
+        return {
+            "status": "success",
+            "data": key_accounts
+        }
+    
+    except HTTPException as http_exc:
+        # Re-raise HTTP exceptions to maintain the status code
+        logger.error(f"HTTP error occurred: {http_exc.detail}")
+        raise http_exc
     except Exception as e:
         logger.error(f"Error getting key accounts: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get key accounts: {str(e)}"
+            detail="Failed to get key accounts. Please try again later."
         )
-
+    
 @router.get("/{client_id}/dashboard")
 async def get_client_dashboard(
     client_id: str,
@@ -244,4 +231,66 @@ async def get_client_payment_delays(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to analyze payment delays: {str(e)}"
+        )
+    
+
+@router.delete("/{client_id}", response_model=Dict[str, Any])
+async def delete_client(
+    client_id: str,
+    service: ClientService = Depends(get_client_service)
+):
+    """Delete a client by ID"""
+    try:
+        success = await service.delete_client(client_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Client not found")
+        return {
+            "status": "success",
+            "message": "Client deleted successfully"
+        }
+    except Exception as e:
+        logger.error(f"Error deleting client: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete client: {str(e)}"
+        )
+
+@router.get("/search", response_model=List[Dict[str, Any]])
+async def search_clients(
+    name: Optional[str] = Query(None, description="Client name to search for"),
+    email: Optional[str] = Query(None, description="Client email to search for"),
+    status: Optional[ClientCategory] = Query(None, description="Client status to filter by"),
+    service: ClientService = Depends(get_client_service)
+):
+    """Search for clients based on name, email, or status"""
+    try:
+        clients = await service.search_clients(name=name, email=email, status=status)
+        return {
+            "status": "success",
+            "clients": clients
+        }
+    except Exception as e:
+        logger.error(f"Error searching clients: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to search clients: {str(e)}"
+        )
+
+@router.get("/{client_id}/alerts", response_model=List[Dict[str, Any]])
+async def get_client_alerts(
+    client_id: str,
+    service: ClientService = Depends(get_client_service)
+):
+    """Get alerts associated with a specific client"""
+    try:
+        alerts = await service.get_client_alerts(client_id)
+        return {
+            "status": "success",
+            "alerts": alerts
+        }
+    except Exception as e:
+        logger.error(f"Error getting alerts for client {client_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get alerts for client: {str(e)}"
         )

@@ -34,7 +34,7 @@ if 'last_search' not in st.session_state:
 session = requests.Session()
 retry_strategy = Retry(
     total=MAX_RETRIES,
-    backoff_factor=1,
+    backoff_factor=0.5,
     status_forcelist=[500, 502, 503, 504]
 )
 adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -525,32 +525,49 @@ with tab4:
         "📊 Suivi Impayés"
     ])
 
+    
     with payment_tab1:
+
         st.subheader("Division de Chèques")
 
+
         with st.form("divide_check_form"):
+
             check_id = st.text_input("ID du Chèque")
-            amount = st.number_input("Montant de la division", min_value=0.0, step=100.0)
+
+            amounts = st.text_input("Montants de la division (séparés par des virgules)")
+
 
             if st.form_submit_button("✂️ Diviser le Chèque"):
-                division_request = {
-                    "amount": float(amount),
-                    "check_id": check_id,
-                    "division_date": datetime.now().strftime("%Y-%m-%d"),
-                    "status": "pending"
-                }
 
-                response = session.post(
-                    f"{API_URL}{PAYMENTS_PREFIX}/divide/{check_id}",
-                    json=division_request
-                )
+                if check_id and amounts:
 
-                if response.status_code == 200:
-                    st.success("✅ Chèque divisé avec succès!")
-                    result = response.json()
-                    st.write("Détails de la Division:", result["data"])
-                else:
-                    st.error(f"❌ Erreur: {response.text}")
+                    try:
+
+                        amounts_list = [float(amount.strip()) for amount in amounts.split(",")]
+
+                        division_request = {"amounts": amounts_list}
+
+                        response = session.post(f"{API_URL}{PAYMENTS_PREFIX}/divide/{check_id}", json=division_request)
+
+
+                        if response.status_code == 200:
+
+                            st.success("✅ Chèque divisé avec succès!")
+
+                            st.json(response.json())
+
+                        else:
+
+                            st.error(f"❌ Erreur: {response.text}")
+
+                    except ValueError as e:
+
+                        st.error(f"Erreur de format: {str(e)}")
+
+                    except Exception as e:
+
+                        st.error(f"Une erreur s'est produite: {str(e)}")
 
 
     with payment_tab2:
@@ -817,7 +834,7 @@ with tab5:
                         if response.status_code == 200:
                             st.success("✅ Client créé avec succès!")
                             time.sleep(1)
-                            st.experimental_rerun()
+                            st.rerun()
                         else:
                             st.error(f"Erreur: {response.text}")
                     except Exception as e:
@@ -1005,7 +1022,7 @@ with client_tab4:
     except Exception as e:
         st.error(f"❌ Erreur : {str(e)}")
         if st.button("🔄 Réessayer"):
-            st.experimental_rerun()
+            st.rerun()
 
 with tab6:
     st.header("📦 Gestion des Stocks")

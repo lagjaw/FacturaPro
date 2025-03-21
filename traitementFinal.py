@@ -7,6 +7,7 @@ import sqlite3
 import json
 import logging
 import tempfile
+import uuid
 import cv2
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException, status
@@ -123,9 +124,22 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
+            cursor.execute('''CREATE TABLE IF NOT EXISTS clients (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT,
+                phone TEXT,
+                address TEXT,
+                status TEXT DEFAULT 'active',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )''')
+
+
             # Create invoices table with exact schema
             cursor.execute('''CREATE TABLE IF NOT EXISTS invoices (
                 id TEXT PRIMARY KEY,
+                client_id Text NOT NULL,
                 invoice_number TEXT NOT NULL,
                 date DATETIME DEFAULT CURRENT_TIMESTAMP,
                 due_date DATETIME,
@@ -142,7 +156,8 @@ class DatabaseManager:
                 status TEXT DEFAULT 'pending',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                items TEXT
+                items TEXT,
+                FOREIGN KEY (client_id) REFERENCES clients (id) 
             )''')
 
             # Create invalid_invoices table with exact schema
@@ -169,6 +184,43 @@ class DatabaseManager:
             )''')
 
             conn.commit()
+
+    def get_client_by_email(self, email:str ) -> Optional[dict]:
+        """recherche d'un client par son email"""
+
+        with self.get_connection() as conn :
+            cursor = conn.cursor()
+            cursor.execute("SELECT id , name , email , phone From clients where email=?",(email,))
+            result =cursor.fetchone()
+
+            return dict(zip(['id','name','email','phone'],result)) if result else None 
+        
+    def get_client_by_phone(self, phone: str) -> Optional[dict]:
+        """Recherche un client par son numéro de téléphone."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, email, phone FROM clients WHERE phone = ?", (phone,))
+            result = cursor.fetchone()
+            return dict(zip(['id', 'name', 'email', 'phone'], result)) if result else None
+        
+    
+
+    def create_client(self, client_data: dict) -> str:
+
+        with self.get_connection() as conn: 
+            cursor = conn.cursor()
+            client_id = str(uuid.uuid4())
+
+            cursor.execute('''INSERT INTO clients (id, name, email, phone, address) VALUES (?, ?, ?, ?, ?)''', (
+                client_id,
+                client_data.get('name'),
+                client_data.get('email'),
+                client_data.get('phone'),  # Corrected: removed the space
+                client_data.get('address')
+            ))
+
+            conn.commit()
+            return client_id
 
 
 class EnhancedInvoiceProcessor:
@@ -440,6 +492,21 @@ class EnhancedInvoiceProcessor:
         if re.search(r'\$|USD', text):
             currency = 'USD'
 
+
+        
+        email_match = re.search(r'Email[:\s]*([\w.-]+@[\w.-]+\.\w+)', text, re.IGNORECASE)
+        phone_match = re.search(r'(?:Tel|Phone)[:\s]*([+\d\s-]{8,})', text, re.IGNORECASE)
+        address_match = re.search(r'Address[:\s]*(.*?)(?=\n\s*(?:GSTIN|Phone|Email))', text, re.IGNORECASE | re.DOTALL)
+
+
+        client_data = {
+            'name' : buyer_info,
+            'email' : email_match.group(1).strip() if email_match else None, 
+            'phone' : phone_match.group(1).strip() if phone_match else None,
+            'address': address_match.group(1).strip() if address_match else None 
+        }
+
+
         # Construct invoice data
         invoice_data = {
             'invoice_number': invoice_number,
@@ -458,6 +525,7 @@ class EnhancedInvoiceProcessor:
             'branch_name': branch_name_match.group(1).strip() if branch_name_match else None,
             'account_number': account_number_match.group(1) if account_number_match else None,
             'bank_swift_code': swift_code_match.group(1) if swift_code_match else None,
+            'client' : client_data,
             "items": str(items)
         }
 
@@ -503,16 +571,21 @@ class EnhancedInvoiceProcessor:
         try:
             # Extract invoice details
             invoice_data = self._extract_invoice_details(text)
+            client_data = invoice_data.get('client')
+
+            client_id = self._handle_client_processing(client_data)
 
             # Check if total exists and is valid
-            if invoice_data.get('total') is None:
+            if invoice_data.get('currency') is None:
                 # Save to invalid_invoices if total is missing
-                self.save_invalid_invoice(invoice_data, "Missing required field: total")
+                self.save_invalid_invoice(invoice_data, "Missing required field: currency")
                 return {
                     "status": "error",
-                    "error": "Missing required field: total",
+                    "error": "Missing required field: currency",
                     "data": invoice_data
                 }
+            
+            
 
             # If total exists, try to save directly to invoices table
             try:
@@ -533,8 +606,8 @@ class EnhancedInvoiceProcessor:
                         INSERT INTO invoices (
                             id, invoice_number, date, due_date, bill_to, total, 
                             subtotal, tax, gstin, discount, bank_name, branch_name,
-                            bank_account_number, bank_swift_code, status, items
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            bank_account_number, bank_swift_code, status, items,client_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?)
                     ''', (
                         invoice_id,
                         invoice_data['invoice_number'],
@@ -551,7 +624,8 @@ class EnhancedInvoiceProcessor:
                         invoice_data.get('account_number'),
                         invoice_data.get('bank_swift_code'),
                         'pending',
-                        json.dumps(invoice_data.get('items', []))
+                        json.dumps(invoice_data.get('items', [])),
+                        client_id
                     ))
                     conn.commit()
 
@@ -578,6 +652,36 @@ class EnhancedInvoiceProcessor:
                 "status": "error",
                 "error": error_message
             }
+        
+    def _handle_client_processing(self, client_data: dict) -> str:
+        """ Gere les verifications et l'insertion du client """
+        try : 
+            # Verfier si le client eciste par email
+            if client_data.get('email'):
+                existing_client = self.db_manager.get_client_by_email(client_data['email'])
+                if existing_client:
+                    return existing_client['id']
+                
+            if client_data.get('phone'):
+                existing_client = self.db_manager.get_client_by_phone(client_data['phone'])
+                if existing_client:
+                    return existing_client['id']
+                
+            # Si aucun client trouve , en creer un nouveau 
+            return self.db_manager.create_client({
+                'name' : client_data.get('name', 'Unknown Client'),
+                'email' : client_data.get('email'),
+                'phone' : client_data.get('phone'),
+                'address': client_data.get('address')
+            })
+        
+        except Exception as e :
+            logger.error(f"Error processing client: {str(e)}")
+            return self.db_manager.create_client({
+                'name' : 'Unknown Client',
+                'email' : 'unknown@gmail.com',
+            })
+
 
     async def process_files(self, files: List[UploadFile]) -> List[Dict[str, Any]]:
         """Process multiple invoice files."""

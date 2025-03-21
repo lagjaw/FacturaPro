@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, DateTime, Numeric, Text
+from sqlalchemy import Column, String, DateTime, Numeric, Text, ForeignKey  # Import ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
@@ -27,9 +27,12 @@ class Invoice(Base):
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     items = Column(Text, nullable=True)
 
-    # Fixed relationship name to match PaymentTransaction
+    client_id = Column(String, ForeignKey('clients.id'), nullable=False)
+
+    # Relationships
     payment_transactions = relationship("PaymentTransaction", back_populates="invoice")
     invoice_products = relationship("InvoiceProduct", back_populates="invoice")
+    client = relationship("Client", back_populates="invoices")  # Define the relationship
 
     def set_items(self, items_data):
         """Stocke les items sous format JSON"""

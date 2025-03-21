@@ -1,6 +1,7 @@
-from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
-from contextlib import contextmanager
+from sqlalchemy import text
+from contextlib import asynccontextmanager, contextmanager
 import sqlite3
 import logging
 from pathlib import Path
@@ -14,14 +15,25 @@ logger = logging.getLogger(__name__)
 
 # Database configuration
 DB_PATH = Path('invoices.db')
-DATABASE_URL = f"sqlite:///{DB_PATH}"
+DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
 # SQLAlchemy setup
-engine = create_engine(DATABASE_URL, echo=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = create_async_engine(DATABASE_URL, echo=True)
+SessionLocal = sessionmaker(bind=engine, class_=AsyncSession)
 Base = declarative_base()
 
-# SQLite connection for raw SQL queries
+@asynccontextmanager
+async def get_db_session():
+    """Context manager for SQLAlchemy sessions"""
+    async with SessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            logging.error(f"Database session error: {e}")
+            raise
+
 @contextmanager
 def get_db_connection():
     """Context manager for SQLite connections"""
@@ -37,22 +49,7 @@ def get_db_connection():
         if conn:
             conn.close()
 
-# SQLAlchemy session context manager
-@contextmanager
-def get_db_session():
-    """Context manager for SQLAlchemy sessions"""
-    session = SessionLocal()
-    try:
-        yield session
-        session.commit()
-    except Exception as e:
-        session.rollback()
-        logger.error(f"Database session error: {e}")
-        raise
-    finally:
-        session.close()
-
-def init_db():
+async def init_db():
     """Initialize database tables"""
     try:
         # Ensure the database directory exists
@@ -71,34 +68,35 @@ def init_db():
         from Models.Alert import Alert
 
         # Create all tables
-        Base.metadata.create_all(bind=engine)
+        async with engine.begin() as conn:
+            # Drop the invoices table if it exists
+            await conn.run_sync(Base.metadata.create_all)
+
         logger.info("SQLAlchemy tables created successfully")
 
-        # Create tables using raw SQL for additional indexes and constraints
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-
+        # Create additional tables using raw SQL for additional indexes and constraints
+        async with get_db_session() as session:
             # Create categories table
-            cursor.execute('''
+            await session.execute(text('''
                 CREATE TABLE IF NOT EXISTS categories (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            ''')
+            '''))
 
             # Create suppliers table
-            cursor.execute('''
+            await session.execute(text('''
                 CREATE TABLE IF NOT EXISTS suppliers (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     contact_info TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            ''')
+            '''))
 
             # Create products table
-            cursor.execute('''
+            await session.execute(text('''
                 CREATE TABLE IF NOT EXISTS products (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -115,10 +113,10 @@ def init_db():
                     FOREIGN KEY (category_id) REFERENCES categories (id),
                     FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
                 )
-            ''')
+            '''))
 
             # Create clients table
-            cursor.execute('''
+            await session.execute(text('''
                 CREATE TABLE IF NOT EXISTS clients (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -130,12 +128,13 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            ''')
+            '''))
 
             # Create invoices table
-            cursor.execute('''
+            await session.execute(text('''
                 CREATE TABLE IF NOT EXISTS invoices (
                     id TEXT PRIMARY KEY,
+                    client_id Text NOT NULL,
                     invoice_number TEXT UNIQUE NOT NULL,
                     date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     due_date TIMESTAMP NOT NULL,
@@ -152,12 +151,13 @@ def init_db():
                     status TEXT DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    items TEXT
+                    items TEXT,
+                    FOREIGN KEY (client_id) REFERENCES clients (id)                                 
                 )
-            ''')
+            '''))
 
             # Create invoice_products table
-            cursor.execute('''
+            await session.execute(text('''
                 CREATE TABLE IF NOT EXISTS invoice_products (
                     invoice_id TEXT,
                     product_id TEXT,
@@ -169,10 +169,10 @@ def init_db():
                     FOREIGN KEY (invoice_id) REFERENCES invoices (id),
                     FOREIGN KEY (product_id) REFERENCES products (id)
                 )
-            ''')
+            '''))
 
             # Create payment_transactions table
-            cursor.execute('''
+            await session.execute(text('''
                 CREATE TABLE IF NOT EXISTS payment_transactions (
                     id TEXT PRIMARY KEY,
                     client_id TEXT,
@@ -189,10 +189,10 @@ def init_db():
                     FOREIGN KEY (client_id) REFERENCES clients (id),
                     FOREIGN KEY (invoice_id) REFERENCES invoices (id)
                 )
-            ''')
+            '''))
 
             # Create checks table
-            cursor.execute('''
+            await session.execute(text('''
                 CREATE TABLE IF NOT EXISTS checks (
                     id TEXT PRIMARY KEY,
                     transaction_id TEXT NOT NULL,
@@ -208,10 +208,10 @@ def init_db():
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (transaction_id) REFERENCES payment_transactions (id)
                 )
-            ''')
+            '''))
 
             # Create check_divisions table
-            cursor.execute('''
+            await session.execute(text('''
                 CREATE TABLE IF NOT EXISTS check_divisions (
                     id TEXT PRIMARY KEY,
                     check_id TEXT NOT NULL,
@@ -222,10 +222,10 @@ def init_db():
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (check_id) REFERENCES checks (id)
                 )
-            ''')
+            '''))
 
             # Create alerts table
-            cursor.execute('''
+            await session.execute(text('''
                 CREATE TABLE IF NOT EXISTS alerts (
                     id TEXT PRIMARY KEY,
                     type TEXT NOT NULL,
@@ -236,35 +236,34 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            ''')
+            '''))
 
-            conn.commit()
+            await session.commit()
             logger.info("Database tables initialized successfully")
 
     except Exception as e:
         logger.error(f"Database initialization error: {e}")
         raise
 
-def check_connection():
+async def check_connection():
     """Test database connection and initialize if needed"""
     try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = cursor.fetchall()
+        async with get_db_session() as session:
+            result = await session.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            tables = result.fetchall()
             if not tables:
-                init_db()
+                await init_db()
             return True
-    except sqlite3.Error as e:
+    except Exception as e:
         logger.error(f"Database check failed: {e}")
         return False
 
 # Initialize database on module import
 if __name__ == "__main__":
-    if not check_connection():
+    import asyncio
+    if not asyncio.run(check_connection()):
         logger.error("Failed to initialize database")
         raise RuntimeError("Database initialization failed")
 
 # Re-export connection functions for backward compatibility
-get_db = get_db_connection  # For raw SQL queries
-get_session = get_db_session  # For SQLAlchemy ORM
+get_db = get_db_session  # For raw SQL

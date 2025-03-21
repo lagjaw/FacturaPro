@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from typing import Optional, List
+from typing import Optional, List, Literal
 from functools import lru_cache
 
 def get_default_cors_origins() -> List[str]:
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     ALLOWED_EXTENSIONS: List[str] = None
 
     # Logging Configuration
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     # Invoice Processing Configuration
